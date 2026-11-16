@@ -61,3 +61,10 @@ python3 vidya_enable_quick_nav.py my-library.vidya
 ## Shared code
 
 `vidya_lib/` holds helpers used by the scripts (id tables, collision checks, SQLite helpers). It is not run directly.
+
+---
+
+## Author & License
+
+Developed by **Prahlad Nrsimha das** (Petr Vacha) at **Get Bhakti s.r.o.**  
+Licensed under the [MIT License](LICENSE).
