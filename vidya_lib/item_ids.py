@@ -146,6 +146,13 @@ def utc_now_rfc3339() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def set_db_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Set a db_meta value. Avoids ON CONFLICT: legacy files have no UNIQUE on key."""
+    cur = conn.execute("UPDATE db_meta SET value = ? WHERE key = ?", (value, key))
+    if cur.rowcount == 0:
+        conn.execute("INSERT INTO db_meta (key, value) VALUES (?, ?)", (key, value))
+
+
 def shift_predicate_sql(
     column: str,
     *,

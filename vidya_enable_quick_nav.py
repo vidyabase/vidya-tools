@@ -28,7 +28,7 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from vidya_lib.item_ids import connect_vidya, table_exists, utc_now_rfc3339
+from vidya_lib.item_ids import connect_vidya, set_db_meta, table_exists, utc_now_rfc3339
 
 DEFAULT_TYPES = ("book", "chapter", "verse")
 
@@ -144,15 +144,8 @@ def main() -> int:
                 "INSERT INTO quick_nav (id, parent_id, sort_order, code, url_path) VALUES (?, ?, ?, ?, ?)",
                 rows,
             )
-            conn.execute(
-                "INSERT INTO db_meta (key, value) VALUES ('quick_nav', 'true') "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-            )
-            conn.execute(
-                "INSERT INTO db_meta (key, value) VALUES ('modified_at', ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (utc_now_rfc3339(),),
-            )
+            set_db_meta(conn, "quick_nav", "true")
+            set_db_meta(conn, "modified_at", utc_now_rfc3339())
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     finally:
         conn.close()
