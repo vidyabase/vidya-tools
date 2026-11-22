@@ -138,6 +138,54 @@ python3 vidya_shift_item_ids.py my-library.vidya --after-id 500 --id-offset 200 
 
 ---
 
+### `vidya_repo.py`
+
+Creates and maintains a **vidya repo**: a folder of static files holding every version of one `.vidya` library, plus an SQL diff between each pair of consecutive versions. Upload `REPO/public/` to a web server, and a reader app updates installed libraries from `db_meta.update_url`, applying the diffs one after another. Repo format and reader rules: [VIDYA-REPO-FORMAT.md](VIDYA-REPO-FORMAT.md).
+
+When a file is added, the tool copies it into the repo and writes `repo_version`, `update_url` (and the min reader versions) into the **copy**. The input file is never changed. Diffs are made with `vidya_sql_diff.py`, wrapped in version guards, and test-applied before they are published.
+
+| Command | What it does |
+|---------|--------------|
+| `init REPO FILE --slug SLUG --base-url URL` | Create the repo with `FILE` as version 1. `update_url` becomes `URL/repo.json`. Optional `--title`. |
+| `add REPO FILE` | Add `FILE` as the next version, with a diff from the previous one. Refuses a file whose content did not change (`--force` to add it anyway). `--skip-verify` skips the test-apply. |
+| `log REPO` | List versions: sizes, min reader versions, labels. |
+| `verify REPO [--deep]` | Check every file and checksum against `repo.json`. `--deep` also replays all diffs and compares the result with the latest full file. |
+| `prune REPO --full 2-5 [--diff 2-3]` | Delete old full files and/or the diffs leading **to** the given versions. Never the latest full file. Warns which versions can no longer update automatically. |
+| `update FILE [--repo-url URL] [--reader-version V]` | Reference reader client: updates an installed `.vidya` file from its repo, as a reader app should. `--yes` updates even if a newer reader is recommended. `--dry-run` shows the plan only. |
+
+Options for `init` and `add`:
+
+| Option | Meaning |
+|--------|---------|
+| `--label TEXT`, `--notes TEXT` | Human name and release notes for the version |
+| `--recommended-reader V` / `--clear-recommended-reader` | Set / remove `recommended_min_reader_version` (e.g. `2.0.14`) |
+| `--required-reader V` / `--clear-required-reader` | Set / remove `required_min_reader_version` |
+| `--dry-run` | Show what would happen; write nothing |
+
+Without these options, a min reader version is taken from the input file's `db_meta`, or else carried over from the previous version.
+
+**Safety:** Input files are never modified. `repo.json` is written last (a failed run leaves the repo as it was), the repo is locked while a command runs, and every published file has SHA-256 checksums in `repo.json`.
+
+```bash
+python3 vidya_repo.py init repos/vedabase-en vedabase-en.vidya \
+    --slug vedabase-en --base-url https://example.org/vidya/vedabase-en/
+python3 vidya_repo.py add repos/vedabase-en vedabase-en.vidya --label "November corrections" --recommended-reader 2.0.14
+python3 vidya_repo.py log repos/vedabase-en
+python3 vidya_repo.py verify repos/vedabase-en --deep
+python3 vidya_repo.py prune repos/vedabase-en --full 2-5 --dry-run
+
+# upload: new files first, repo.json last
+rsync -av --exclude repo.json repos/vedabase-en/public/ server:/var/www/vidya/vedabase-en/
+rsync -av --delete repos/vedabase-en/public/ server:/var/www/vidya/vedabase-en/
+
+# check from a reader's point of view
+python3 vidya_repo.py update ~/Library/vedabase-en.vidya --reader-version 2.0.14 --dry-run
+```
+
+Tests: `python3 -m unittest discover tests -v`
+
+---
+
 ## Shared code
 
 `vidya_lib/` holds helpers used by the scripts (id tables, collision checks, SQLite helpers). It is not run directly.

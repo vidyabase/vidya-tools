@@ -998,8 +998,12 @@ Do **not** add `backbone_id` columns in new files.
 | `editor_next_item_id` | `42` | yes |
 | `fts_enabled` | `1` | yes |
 | `fts_built` | `1` | yes after building §12 |
+| `repo_version` | `7` | set by `vidya_repo.py` (version in the library's repo) |
+| `update_url` | `https://example.org/vidya/vedabase-en/repo.json` | set by `vidya_repo.py` (replaces legacy `update-url`) |
+| `recommended_min_reader_version` | `2.0.14` | optional, set by `vidya_repo.py` |
+| `required_min_reader_version` | `2.1.0` | optional, set by `vidya_repo.py` |
 
-Preserve unknown keys when editing existing files.
+Preserve unknown keys when editing existing files. The four repo keys are managed by the repo tool: converters and editors should not write them. See [VIDYA-REPO-FORMAT.md](VIDYA-REPO-FORMAT.md) §4.
 
 ---
 
