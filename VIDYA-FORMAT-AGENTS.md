@@ -156,9 +156,11 @@ VALUES (<parent_item_id>, '<tree-type>', <item_id>, NULL, 0, <sort_order>);
 - `is_page` = `0`
 - `sort_order` = 0-based position among siblings
 
-**Allowed HTML inline tags:** `<strong>`, `<em>`, `<u>`, `<br>`.
+**Allowed HTML inline tags (writers):** `<strong>`, `<em>`, `<u>`, `<br>`, plus `<a>` for wikilinks (§14). List types additionally use `<ul>/<ol>/<li>` (§3.9, §3.10).
 
-**No block wrappers.** Record `content` is inline HTML only — do **not** wrap in `<p>`, `<div>`, or other block elements. Each `records` row is already one block; the `content_type` controls presentation (centering, bold, etc.).
+**No block wrappers (writers).** Record `content` is inline HTML only — writers must **not** wrap in `<p>`, `<div>`, or other block elements. Each `records` row is already one block; the `content_type` controls presentation (centering, bold, etc.).
+
+**Readers tolerate `<p>`.** This is a rule for *producers*; files in the wild (legacy `vidya-builder` output and the example in §3.14 below) do contain `<p>…</p>` wrappers, occasional `<div>`, `<b>/<i>`, and raw `<table>` HTML. A reader must accept them: keep `<p>` in the sanitizer allow-list, render it with zero margins inside the record block, and strip the outer `<p>` only where it changes layout (`devanagari`, `bengali`). See AGENT_INSTRUCTIONS.md §8.4.
 
 **Types that must keep internal `<br>`** (do not split into separate blocks): `verse-text`, `devanagari`, `bengali`, `translation`.
 
@@ -431,7 +433,8 @@ VALUES (50, 'bengali', 113, NULL, 0, 11);
 ```sql
 INSERT INTO records (id, content_type, content)
 VALUES (114, 'wfw-text',
-  '<p>dharma-kṣetre — in the place of pilgrimage; kuru-kṣetre — at Kurukshetra</p>');
+  '<em>dharma-kṣetre</em> — in the place of pilgrimage; kuru-kṣetre — at Kurukshetra');
+-- Note: older files store this with a <p>…</p> wrapper; readers must accept both (§3 "Readers tolerate <p>").
 
 INSERT INTO content_tree (parent_id, type, item_id, slug, is_page, sort_order)
 VALUES (50, 'record', 114, NULL, 0, 12);
@@ -786,6 +789,8 @@ INSERT INTO content_tree (parent_id, type, item_id, slug, is_page, sort_order)
 VALUES (1, 'canto', 2, '1', 1, 0);
 ```
 
+Optional: `short_title`, `medium_title`, `cover` (WebP BLOB — §11.4).
+
 ### 4.3 `chapter`
 
 ```sql
@@ -1102,7 +1107,10 @@ JPEG, PNG, WebP, GIF (raster); SVG (vector, into `image_assets` only).
 
 - Store **only** in `books.cover` (WebP BLOB).
 - **Not** in `image_assets`.
-- Only on `books` rows where `books.type = 'book'`.
+- Only on `books` rows where `books.type` is `'book'` or `'canto'`.
+- Store raw image bytes as a BLOB — **not** base64 TEXT and not a `data:` URL.
+- No cover → SQL `NULL`, not an empty string `''`.
+- Readers should tolerate legacy base64 TEXT covers (decode them) and treat `''` as no cover.
 
 ### 11.5 Asset lifecycle
 
@@ -1419,6 +1427,7 @@ INSERT INTO url_paths (url_path, type, item_id) VALUES ('bg/2/13', 'verse', 3);
 | Leading `/` in url_path | `bg/2/13` not `/bg/2/13` |
 | `verse_text` | `verse-text` |
 | Cover in `image_assets` | `books.cover` only |
+| Cover as base64 TEXT or `''` | WebP BLOB, or `NULL` when absent |
 | Skipping `url_paths` | Always build §9 |
 | Skipping `search_index` | Build §12 for searchable libraries |
 
