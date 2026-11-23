@@ -14,13 +14,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from compression import zstd
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from vidya_lib import repo as vr  # noqa: E402
+from vidya_lib import zstd_compat as zstd  # noqa: E402
 
 
 def make_vidya(path: Path, records: dict[int, str], *, extra_meta=None, extra_sql: str = "") -> Path:

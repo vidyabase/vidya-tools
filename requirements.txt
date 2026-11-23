@@ -1,0 +1,3 @@
+# Only vidya_repo.py needs a third-party package, and only on Python < 3.14
+# (3.14+ has zstd built in as compression.zstd).
+zstandard>=0.22; python_version < "3.14"

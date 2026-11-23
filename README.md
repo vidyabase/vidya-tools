@@ -2,7 +2,7 @@
 
 Command-line utilities for maintaining [`.vidya`](VIDYA-FORMAT-AGENTS.md) libraries (SQLite databases used by Vidya Editor). Each tool is a standalone Python script for **advanced** workflows—merge prep, bulk fixes—not everyday editing in the app.
 
-**Requirements:** Python 3.9+ (stdlib only; no pip packages).
+**Requirements:** Python 3.9+. Everything is stdlib only, except `vidya_repo.py` on Python older than 3.14: it needs the `zstandard` package (`pip install -r requirements.txt`). Python 3.14+ has zstd built in.
 
 **Format reference:** [VIDYA-FORMAT-AGENTS.md](VIDYA-FORMAT-AGENTS.md)
 
