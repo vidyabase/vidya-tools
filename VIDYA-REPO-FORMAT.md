@@ -277,11 +277,12 @@ Upload the contents of `REPO/public/` so that the new files arrive **before** `r
 2. Upload `repo.json` last.
 3. After `prune`, delete the removed files from the server **after** uploading the new `repo.json`.
 
-That way `repo.json` never points to a file that is not there yet. With rsync, two passes do this:
+That way `repo.json` never points to a file that is not there yet. `vidya_repo.py rsync REPO DEST [--delete]` does this (after running `verify`). By hand, with rsync:
 
 ```bash
-rsync -av --exclude repo.json REPO/public/ server:/var/www/vidya/vedabase-en/
-rsync -av --delete REPO/public/ server:/var/www/vidya/vedabase-en/
+rsync -av --exclude repo.json --exclude '*.tmp' REPO/public/ server:/var/www/vidya/vedabase-en/
+rsync -av REPO/public/repo.json server:/var/www/vidya/vedabase-en/
+rsync -av --delete --exclude '*.tmp' REPO/public/ server:/var/www/vidya/vedabase-en/   # only after prune
 ```
 
 Recommended server settings:

@@ -130,6 +130,12 @@ def cmd_prune(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_rsync(args: argparse.Namespace) -> int:
+    vr.rsync_upload(args.repo, args.dest, delete=args.delete, dry_run=args.dry_run,
+                    verify=not args.skip_verify, rsync_args=tuple(args.rsync_arg), log=_log)
+    return 0
+
+
 def cmd_update(args: argparse.Namespace) -> int:
     plan = vr.client_update(args.file, repo_url=args.repo_url, reader_version=args.reader_version,
                             yes=args.yes, dry_run=args.dry_run, log=_log)
@@ -182,6 +188,17 @@ def main() -> int:
                         " (readers on older versions then need a full download)")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_prune)
+
+    p = sub.add_parser("rsync", help="upload REPO/public/ to DEST with rsync (files first, repo.json last)")
+    p.add_argument("repo", type=Path)
+    p.add_argument("dest", help="rsync destination folder, e.g. server:/var/www/vidya/vedabase-en")
+    p.add_argument("--delete", action="store_true",
+                   help="after uploading repo.json, delete files on DEST that are not in REPO/public/ (after prune)")
+    p.add_argument("--dry-run", action="store_true", help="pass --dry-run to rsync; upload nothing")
+    p.add_argument("--skip-verify", action="store_true", help="do not run verify before uploading")
+    p.add_argument("--rsync-arg", action="append", default=[], metavar="ARG",
+                   help="extra rsync argument, repeatable (e.g. --rsync-arg=-e --rsync-arg='ssh -p 2222')")
+    p.set_defaults(func=cmd_rsync)
 
     p = sub.add_parser("update", help="update a local .vidya file from its repo, as a reader app would")
     p.add_argument("file", type=Path, help="installed .vidya file (changed in place, one diff at a time)")

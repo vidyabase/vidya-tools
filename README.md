@@ -151,6 +151,7 @@ When a file is added, the tool copies it into the repo and writes `repo_version`
 | `log REPO` | List versions: sizes, min reader versions, labels. |
 | `verify REPO [--deep]` | Check every file and checksum against `repo.json`. `--deep` also replays all diffs and compares the result with the latest full file. |
 | `prune REPO --full 2-5 [--diff 2-3]` | Delete old full files and/or the diffs leading **to** the given versions. Never the latest full file. Warns which versions can no longer update automatically. |
+| `rsync REPO DEST [--delete]` | Upload `REPO/public/` to `DEST` (e.g. `server:/var/www/vidya/vedabase-en`) in a safe order: runs `verify`, uploads the new files, then `repo.json`. `--delete` then removes files on `DEST` that are no longer in `public/` (after `prune`). `--dry-run` uploads nothing, `--skip-verify` skips the check, `--rsync-arg ARG` (repeatable) passes extra options to rsync. |
 | `update FILE [--repo-url URL] [--reader-version V]` | Reference reader client: updates an installed `.vidya` file from its repo, as a reader app should. `--yes` updates even if a newer reader is recommended. `--dry-run` shows the plan only. |
 
 Options for `init` and `add`:
@@ -174,9 +175,8 @@ python3 vidya_repo.py log repos/vedabase-en
 python3 vidya_repo.py verify repos/vedabase-en --deep
 python3 vidya_repo.py prune repos/vedabase-en --full 2-5 --dry-run
 
-# upload: new files first, repo.json last
-rsync -av --exclude repo.json repos/vedabase-en/public/ server:/var/www/vidya/vedabase-en/
-rsync -av --delete repos/vedabase-en/public/ server:/var/www/vidya/vedabase-en/
+# upload: new files first, repo.json last (--delete also removes pruned files)
+python3 vidya_repo.py rsync repos/vedabase-en server:/var/www/vidya/vedabase-en --delete
 
 # check from a reader's point of view
 python3 vidya_repo.py update ~/Library/vedabase-en.vidya --reader-version 2.0.14 --dry-run

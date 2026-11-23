@@ -2,7 +2,7 @@
 
 The repo format is described in VIDYA-REPO-FORMAT.md. This module holds the logic
 used by vidya_repo.py: creating a repo, adding versions (with SQL diffs made by
-vidya_sql_diff.py), pruning, verifying, and a reference update client that does
+vidya_sql_diff.py), pruning, verifying, uploading with rsync, and a reference update client that does
 what a reader app should do.
 """
 
@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import urllib.parse
@@ -762,6 +763,71 @@ def prune(
                 pass
     log(f"removed {len(to_delete)} file(s)")
     return lost
+
+
+# --------------------------------------------------------------------------- upload
+
+
+def _rsync_dest(dest: str) -> str:
+    """rsync destination as a folder (trailing slash), local path or host:path."""
+    dest = str(dest)
+    if not dest:
+        raise RepoError("destination is empty")
+    return dest if dest.endswith("/") else dest + "/"
+
+
+def rsync_upload(
+    repo: Path,
+    dest: str,
+    *,
+    delete: bool = False,
+    dry_run: bool = False,
+    verify: bool = True,
+    rsync_args: tuple[str, ...] = (),
+    rsync: str = "rsync",
+    log: Log = _quiet,
+) -> list[list[str]]:
+    """Upload REPO/public/ to dest with rsync, in the order readers need (§9):
+
+    1. every file except repo.json (new full files and diffs),
+    2. repo.json,
+    3. with delete: remove files on dest that are no longer in public/ (after prune).
+
+    Returns the rsync commands that were run (or would be, with dry_run).
+    """
+    repo = Path(repo)
+    load_manifest(repo)  # fails early if this is not a repo
+    src = str(public_dir(repo).resolve()) + "/"
+    dst = _rsync_dest(dest)
+    base = [rsync, "-av", *(["--dry-run"] if dry_run else []), *rsync_args]
+    cmds = [
+        [*base, "--exclude", MANIFEST_NAME, "--exclude", "*.tmp", src, dst],
+        [*base, src + MANIFEST_NAME, dst],
+    ]
+    if delete:
+        # Only deletions are left at this point; excluded *.tmp files are not deleted.
+        cmds.append([*base, "--delete", "--exclude", "*.tmp", src, dst])
+    steps = ["files", MANIFEST_NAME, "delete removed files"]
+    with RepoLock(repo):  # no add/prune while uploading
+        if verify:
+            res = verify_repo(repo)
+            for w in res.warnings:
+                log(f"warning: {w}")
+            if not res.ok:
+                for e in res.errors:
+                    log(f"error: {e}")
+                raise RepoError("verify failed; not uploading (fix the repo, or use --skip-verify)")
+        for step, cmd in zip(steps, cmds):
+            log(f"== {step}: {' '.join(cmd)}")
+            try:
+                r = subprocess.run(cmd)
+            except FileNotFoundError:
+                raise RepoError(f"{rsync!r} not found; install rsync") from None
+            if r.returncode != 0:
+                raise RepoError(f"rsync failed with exit code {r.returncode} ({step}); "
+                                "fix the problem and run again (it is safe to repeat)")
+    log("dry run: nothing uploaded" if dry_run else f"uploaded to {dst}")
+    return cmds
 
 
 # --------------------------------------------------------------------------- verify

@@ -8,6 +8,7 @@ Each test builds a small sample repo in a temporary folder.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -363,6 +364,61 @@ class TestPruneAndVerify(RepoTestCase):
         self.assertEqual(m["versions"][1]["format_version"], "2")
 
 
+@unittest.skipUnless(shutil.which("rsync"), "rsync not installed")
+class TestRsync(RepoTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.init()
+        vr.add_version(self.repo, self.v2)
+        self.dest = self.tmp / "www" / "sample-en"
+        self.dest.mkdir(parents=True)
+
+    def upload(self, **kw):
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        saved = os.dup(1)
+        os.dup2(devnull, 1)  # hide rsync's own output
+        try:
+            return vr.rsync_upload(self.repo, str(self.dest), **kw)
+        finally:
+            os.dup2(saved, 1)
+            os.close(saved)
+            os.close(devnull)
+
+    def names(self, folder: Path) -> set[str]:
+        return {p.name for p in folder.iterdir()}
+
+    def test_uploads_everything_repo_json_after_files(self):
+        cmds = self.upload()
+        self.assertEqual(self.names(self.dest), self.names(self.public))
+        self.assertEqual((self.dest / "repo.json").read_bytes(), (self.public / "repo.json").read_bytes())
+        self.assertIn("repo.json", cmds[0])  # excluded in the first pass
+        self.assertTrue(cmds[1][-2].endswith("/repo.json"))
+        self.assertEqual(len(cmds), 2)
+
+    def test_dry_run_uploads_nothing(self):
+        self.upload(dry_run=True)
+        self.assertEqual(self.names(self.dest), set())
+
+    def test_delete_only_when_asked_and_keeps_tmp(self):
+        self.upload()
+        vr.prune(self.repo, full={1})
+        (self.dest / "partial.tmp").write_text("x")
+        self.upload()
+        self.assertIn("sample-en-000001.vidyapack", self.names(self.dest))
+        self.upload(delete=True)
+        self.assertNotIn("sample-en-000001.vidyapack", self.names(self.dest))
+        self.assertIn("partial.tmp", self.names(self.dest))
+        self.assertEqual(self.names(self.dest) - {"partial.tmp"}, self.names(self.public))
+
+    def test_broken_repo_is_not_uploaded(self):
+        f = self.public / "sample-en-000002.vidyapack"
+        f.write_bytes(f.read_bytes()[:-10])
+        with self.assertRaises(vr.RepoError):
+            self.upload()
+        self.assertEqual(self.names(self.dest), set())
+        self.assertFalse((self.repo / ".lock").exists())
+
+
 class TestCli(RepoTestCase):
     def run_cli(self, *args) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, str(ROOT / "vidya_repo.py"), *map(str, args)],
@@ -388,6 +444,11 @@ class TestCli(RepoTestCase):
         self.assertEqual(meta_of(installed)["repo_version"], "2")
         r = self.run_cli("prune", self.repo, "--full", "1", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
+        if shutil.which("rsync"):
+            dest = self.tmp / "www"
+            r = self.run_cli("rsync", self.repo, dest, "--delete")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertTrue((dest / "repo.json").is_file())
 
 
 if __name__ == "__main__":
