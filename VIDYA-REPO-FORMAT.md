@@ -28,8 +28,8 @@ Versions are never rewritten. To undo a release, publish a new version with the 
 REPO/                                  working folder (on the maintainer's machine)
 ├── public/                            ← upload this folder; update_url points into it
 │   ├── repo.json                      manifest (the only file that changes)
-│   ├── vedabase-en-000001.vidya.zst    full file of version 1
-│   ├── vedabase-en-000002.vidya.zst    full file of version 2
+│   ├── vedabase-en-000001.vidyapack    full file of version 1
+│   ├── vedabase-en-000002.vidyapack    full file of version 2
 │   ├── vedabase-en-000001-000002.sql.zst   diff 1 → 2
 │   └── …
 ├── .lock                              exists only while the tool runs
@@ -40,7 +40,7 @@ REPO/                                  working folder (on the maintainer's machi
 
 | File | Pattern | Example |
 |------|---------|---------|
-| Full file | `{slug}-{version:06d}.vidya.zst` | `vedabase-en-000007.vidya.zst` |
+| Full file | `{slug}-{version:06d}.vidyapack` | `vedabase-en-000007.vidyapack` |
 | Diff | `{slug}-{from:06d}-{to:06d}.sql.zst` | `vedabase-en-000006-000007.sql.zst` |
 | Manifest | `repo.json` | |
 
@@ -52,7 +52,7 @@ A full file is published under a versioned name, but it is **installed** under `
 
 Every published file except `repo.json` is a single [Zstandard](https://facebook.github.io/zstd/) frame (RFC 8878) holding **exactly one** file, compressed at level 19. Unpacked, a full file is the library under the name `install_file_name`, and a diff is the `.sql` text.
 
-A user who downloads a full file by hand can unpack it with `zstd -d vedabase-en-000007.vidya.zst -o vedabase-en.vidya` (or any tool that reads zstd) and import the result into the reader. Output is reproducible: the same content gives the same bytes.
+A user who downloads a full file by hand can unpack it with `zstd -d vedabase-en-000007.vidyapack -o vedabase-en.vidya` (or any tool that reads zstd) and import the result into the reader. Output is reproducible: the same content gives the same bytes.
 
 ---
 
@@ -79,7 +79,7 @@ UTF-8 JSON. Readers must ignore unknown keys.
       "recommended_min_reader_version": null,
       "required_min_reader_version": null,
       "full": {
-        "file": "vedabase-en-000001.vidya.zst",
+        "file": "vedabase-en-000001.vidyapack",
         "size": 84011434,
         "sha256": "…",
         "raw_size": 230572032,
@@ -95,7 +95,7 @@ UTF-8 JSON. Readers must ignore unknown keys.
       "format_version": "1.0",
       "recommended_min_reader_version": "2.0.14",
       "required_min_reader_version": null,
-      "full": { "file": "vedabase-en-000002.vidya.zst", "size": 86272817, "sha256": "…", "raw_size": 232300544, "raw_sha256": "…" },
+      "full": { "file": "vedabase-en-000002.vidyapack", "size": 86272817, "sha256": "…", "raw_size": 232300544, "raw_sha256": "…" },
       "diff": {
         "from": 1,
         "file": "vedabase-en-000001-000002.sql.zst",
@@ -273,7 +273,7 @@ Transport security is HTTPS. There are no signatures.
 
 Upload the contents of `REPO/public/` so that the new files arrive **before** `repo.json`:
 
-1. Upload the new `*.vidya.zst` and `*.sql.zst` files.
+1. Upload the new `*.vidyapack` and `*.sql.zst` files.
 2. Upload `repo.json` last.
 3. After `prune`, delete the removed files from the server **after** uploading the new `repo.json`.
 
@@ -287,7 +287,7 @@ rsync -av --delete REPO/public/ server:/var/www/vidya/vedabase-en/
 Recommended server settings:
 - `repo.json`: `Cache-Control: no-cache` (or a short max-age).
 - Other files: long caching (`Cache-Control: public, max-age=31536000, immutable`). Their names never get new content.
-- Serve `.zst` files as `application/zstd` (or `application/octet-stream`). Do not enable transparent compression for them; they are already compressed.
+- Serve `.vidyapack` and `.zst` files as `application/zstd` (or `application/octet-stream`). Do not enable transparent compression for them; they are already compressed.
 
 ---
 

@@ -77,7 +77,7 @@ class RepoError(Exception):
 
 
 def full_file_name(slug: str, version: int) -> str:
-    return f"{slug}-{version:0{VERSION_DIGITS}d}.vidya.zst"
+    return f"{slug}-{version:0{VERSION_DIGITS}d}.vidyapack"
 
 
 def diff_file_name(slug: str, from_version: int, to_version: int) -> str:
