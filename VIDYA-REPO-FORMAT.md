@@ -14,7 +14,7 @@ The repo is created and maintained with [`vidya_repo.py`](README.md#vidya_repopy
 |------|---------|
 | **library** | One `.vidya` file (SQLite). One repo = one library. Three libraries = three repos. |
 | **version** | An integer `1, 2, 3, …`, increasing by one with each release. Stored as `db_meta.repo_version` inside the file. |
-| **full file** | The complete `.vidya` file of a version, in a zip. |
+| **full file** | The complete `.vidya` file of a version, compressed with zstd. |
 | **diff** | An SQL script that turns version `N-1` into version `N`. Made by `vidya_sql_diff.py`, with version guards added (§6). |
 | **slug** | The repo name used in file names, e.g. `vedabase-en`: lowercase letters, digits, single hyphens. |
 
@@ -28,9 +28,9 @@ Versions are never rewritten. To undo a release, publish a new version with the 
 REPO/                                  working folder (on the maintainer's machine)
 ├── public/                            ← upload this folder; update_url points into it
 │   ├── repo.json                      manifest (the only file that changes)
-│   ├── vedabase-en-000001.vidya.zip    full file of version 1
-│   ├── vedabase-en-000002.vidya.zip    full file of version 2
-│   ├── vedabase-en-000001-000002.sql.zip   diff 1 → 2
+│   ├── vedabase-en-000001.vidya.zst    full file of version 1
+│   ├── vedabase-en-000002.vidya.zst    full file of version 2
+│   ├── vedabase-en-000001-000002.sql.zst   diff 1 → 2
 │   └── …
 ├── .lock                              exists only while the tool runs
 └── .work/                             scratch folder, exists only while the tool runs
@@ -40,24 +40,19 @@ REPO/                                  working folder (on the maintainer's machi
 
 | File | Pattern | Example |
 |------|---------|---------|
-| Full file | `{slug}-{version:06d}.vidya.zip` | `vedabase-en-000007.vidya.zip` |
-| Diff | `{slug}-{from:06d}-{to:06d}.sql.zip` | `vedabase-en-000006-000007.sql.zip` |
+| Full file | `{slug}-{version:06d}.vidya.zst` | `vedabase-en-000007.vidya.zst` |
+| Diff | `{slug}-{from:06d}-{to:06d}.sql.zst` | `vedabase-en-000006-000007.sql.zst` |
 | Manifest | `repo.json` | |
 
 Files other than `repo.json` are **immutable**: once published, a file with a given name never changes. Readers find files only through `repo.json`, never by building names themselves.
 
 A full file is published under a versioned name, but it is **installed** under `install_file_name` from `repo.json` (e.g. `vedabase-en.vidya`). The reader keeps user data (bookmarks, notes, highlights) per file name, so the installed name must stay the same across versions.
 
-### Zip files
+### Zstandard files
 
-Every published file except `repo.json` is a zip holding **exactly one** file, compressed with Deflate:
+Every published file except `repo.json` is a single [Zstandard](https://facebook.github.io/zstd/) frame (RFC 8878) holding **exactly one** file, compressed at level 19. Unpacked, a full file is the library under the name `install_file_name`, and a diff is the `.sql` text.
 
-| Zip | Entry inside |
-|-----|--------------|
-| `vedabase-en-000007.vidya.zip` | `vedabase-en.vidya` (= `install_file_name`) |
-| `vedabase-en-000006-000007.sql.zip` | `vedabase-en-000006-000007.sql` |
-
-Because the full zip already contains the file under its install name, a user who downloads it by hand can open it with any unzip tool or import it into the reader directly. Zips are reproducible: the entry has a fixed date (1980-01-01) and fixed attributes, so the same content gives the same zip. Files over 4 GB use Zip64.
+A user who downloads a full file by hand can unpack it with `zstd -d vedabase-en-000007.vidya.zst -o vedabase-en.vidya` (or any tool that reads zstd) and import the result into the reader. Output is reproducible: the same content gives the same bytes.
 
 ---
 
@@ -84,8 +79,7 @@ UTF-8 JSON. Readers must ignore unknown keys.
       "recommended_min_reader_version": null,
       "required_min_reader_version": null,
       "full": {
-        "file": "vedabase-en-000001.vidya.zip",
-        "entry": "vedabase-en.vidya",
+        "file": "vedabase-en-000001.vidya.zst",
         "size": 84011434,
         "sha256": "…",
         "raw_size": 230572032,
@@ -101,11 +95,10 @@ UTF-8 JSON. Readers must ignore unknown keys.
       "format_version": "1.0",
       "recommended_min_reader_version": "2.0.14",
       "required_min_reader_version": null,
-      "full": { "file": "vedabase-en-000002.vidya.zip", "entry": "vedabase-en.vidya", "size": 86272817, "sha256": "…", "raw_size": 232300544, "raw_sha256": "…" },
+      "full": { "file": "vedabase-en-000002.vidya.zst", "size": 86272817, "sha256": "…", "raw_size": 232300544, "raw_sha256": "…" },
       "diff": {
         "from": 1,
-        "file": "vedabase-en-000001-000002.sql.zip",
-        "entry": "vedabase-en-000001-000002.sql",
+        "file": "vedabase-en-000001-000002.sql.zst",
         "size": 2442545,
         "sha256": "…",
         "raw_size": 8754648,
@@ -148,9 +141,8 @@ UTF-8 JSON. Readers must ignore unknown keys.
 | Key | Meaning |
 |-----|---------|
 | `file` | File name, relative to `repo.json` (resolve it against `update_url`). |
-| `entry` | Name of the one file inside the zip. |
-| `size`, `sha256` | Size and SHA-256 (lowercase hex) of the zip **as published**. |
-| `raw_size`, `raw_sha256` | Size and SHA-256 of the **unpacked** entry. |
+| `size`, `sha256` | Size and SHA-256 (lowercase hex) of the `.zst` file **as published**. |
+| `raw_size`, `raw_sha256` | Size and SHA-256 of the **unpacked** content. |
 | `from` | (diffs only) The version the diff starts from, always `version - 1`. |
 | `stats` | (diffs only, informative) Row counts and changed tables. |
 
@@ -193,7 +185,7 @@ The reader should also check both keys in `db_meta` when it **opens** a library,
 
 ## 6. Diff files and guards
 
-A diff is the output of `vidya_sql_diff.py ORIGINAL NEW`, with two **version guards** added, in a zip (§2):
+A diff is the output of `vidya_sql_diff.py ORIGINAL NEW`, with two **version guards** added, in a `.zst` file (§2):
 
 ```sql
 PRAGMA foreign_keys = OFF;
@@ -247,7 +239,7 @@ url     = db_meta.update_url
    - *missing diff:* "To get version `latest`, download the full file", linking to `latest`'s `full.file` and saying to install it as `install_file_name`.
 6. **Apply.** For each step:
    1. Download `diff.file`.
-   2. Check that its SHA-256 equals `diff.sha256`, then unpack the one entry of the zip.
+   2. Check that its SHA-256 equals `diff.sha256`, then decompress it.
    3. Check that the unpacked bytes match `diff.raw_sha256`.
    4. Close other connections to the library and apply the SQL (§6).
    5. Check that `db_meta.repo_version` now equals the step's version.
@@ -281,7 +273,7 @@ Transport security is HTTPS. There are no signatures.
 
 Upload the contents of `REPO/public/` so that the new files arrive **before** `repo.json`:
 
-1. Upload the new `*.vidya.zip` and `*.sql.zip` files.
+1. Upload the new `*.vidya.zst` and `*.sql.zst` files.
 2. Upload `repo.json` last.
 3. After `prune`, delete the removed files from the server **after** uploading the new `repo.json`.
 
@@ -295,7 +287,7 @@ rsync -av --delete REPO/public/ server:/var/www/vidya/vedabase-en/
 Recommended server settings:
 - `repo.json`: `Cache-Control: no-cache` (or a short max-age).
 - Other files: long caching (`Cache-Control: public, max-age=31536000, immutable`). Their names never get new content.
-- Serve `.zip` files as `application/zip`. No special compression settings are needed; servers do not unpack zips on the way.
+- Serve `.zst` files as `application/zstd` (or `application/octet-stream`). Do not enable transparent compression for them; they are already compressed.
 
 ---
 

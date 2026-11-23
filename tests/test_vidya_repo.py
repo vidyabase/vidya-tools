@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import zipfile
+from compression import zstd
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -52,10 +52,8 @@ def meta_of(path: Path) -> dict:
 
 
 def unpack(zp: Path, dst: Path) -> Path:
-    with zipfile.ZipFile(zp) as zf:
-        (entry,) = zf.infolist()
-        with zf.open(entry) as fi, open(dst, "wb") as fo:
-            shutil.copyfileobj(fi, fo)
+    with zstd.open(zp, "rb") as fi, open(dst, "wb") as fo:
+        shutil.copyfileobj(fi, fo)
     return dst
 
 
@@ -95,7 +93,7 @@ class TestInitAndAdd(RepoTestCase):
         self.assertEqual(m["update_url"], "https://example.org/vidya/sample-en/repo.json")
         self.assertEqual(m["install_file_name"], "sample-en.vidya")
         self.assertEqual(m["title"], "Sample Library")
-        self.assertTrue((self.public / "sample-en-000001.vidya.zip").is_file())
+        self.assertTrue((self.public / "sample-en-000001.vidya.zst").is_file())
         self.assertIsNone(m["versions"][0]["diff"])
         meta = meta_of(self.full_copy(1))
         self.assertEqual(meta["repo_version"], "1")
@@ -123,27 +121,27 @@ class TestInitAndAdd(RepoTestCase):
         self.assertEqual(m["latest"], 3)
         e3 = vr.version_entry(m, 3)
         self.assertEqual(e3["diff"]["from"], 2)
-        self.assertEqual(e3["diff"]["file"], "sample-en-000002-000003.sql.zip")
-        self.assertEqual(e3["full"]["file"], "sample-en-000003.vidya.zip")
+        self.assertEqual(e3["diff"]["file"], "sample-en-000002-000003.sql.zst")
+        self.assertEqual(e3["full"]["file"], "sample-en-000003.vidya.zst")
         self.assertIn("authors", e3["diff"]["stats"]["tables"])
         self.assertEqual(vr.version_entry(m, 2)["label"], "fixes")
         self.assertEqual(meta_of(self.full_copy(3))["repo_version"], "3")
 
-    def test_zip_layout_and_reproducible(self):
+    def test_zst_layout_and_reproducible(self):
         self.init()
         vr.add_version(self.repo, self.v2)
         e = vr.version_entry(self.manifest(), 2)
-        with zipfile.ZipFile(self.public / e["full"]["file"]) as zf:
-            self.assertEqual(zf.namelist(), ["sample-en.vidya"])
-            self.assertEqual(zf.infolist()[0].compress_type, zipfile.ZIP_DEFLATED)
-        self.assertEqual(e["full"]["entry"], "sample-en.vidya")
-        with zipfile.ZipFile(self.public / e["diff"]["file"]) as zf:
-            self.assertEqual(zf.namelist(), ["sample-en-000001-000002.sql"])
+        self.assertEqual(e["full"]["file"], "sample-en-000002.vidya.zst")
+        self.assertEqual(e["diff"]["file"], "sample-en-000001-000002.sql.zst")
+        self.assertNotIn("entry", e["full"])
+        with open(self.public / e["full"]["file"], "rb") as f:
+            self.assertEqual(f.read(4), b"\x28\xb5\x2f\xfd")  # zstd magic
         src = self.tmp / "x.bin"
         src.write_bytes(b"abc" * 1000)
-        a = vr.zip_file(src, self.tmp / "a.zip", "x.bin", 6)
-        b = vr.zip_file(src, self.tmp / "b.zip", "x.bin", 6)
+        a = vr.zst_file(src, self.tmp / "a.zst")
+        b = vr.zst_file(src, self.tmp / "b.zst")
         self.assertEqual(a["sha256"], b["sha256"])
+        self.assertEqual(vr.unzst_file(self.tmp / "a.zst"), (3000, a["raw_sha256"]))
 
     def test_unchanged_content_is_refused_unless_forced(self):
         self.init()
@@ -160,7 +158,7 @@ class TestInitAndAdd(RepoTestCase):
         before = (self.public / "repo.json").read_text()
         vr.add_version(self.repo, self.v2, vr.VersionOptions(dry_run=True))
         self.assertEqual((self.public / "repo.json").read_text(), before)
-        self.assertEqual(sorted(p.name for p in self.public.iterdir()), ["repo.json", "sample-en-000001.vidya.zip"])
+        self.assertEqual(sorted(p.name for p in self.public.iterdir()), ["repo.json", "sample-en-000001.vidya.zst"])
 
     def test_lock_blocks_second_run(self):
         self.init()
@@ -250,8 +248,8 @@ class TestApplyAndGuards(RepoTestCase):
 
     def diff_sql(self, version: int) -> str:
         e = vr.version_entry(self.manifest(), version)
-        with zipfile.ZipFile(self.public / e["diff"]["file"]) as zf:
-            return zf.read(e["diff"]["entry"]).decode("utf-8")
+        with zstd.open(self.public / e["diff"]["file"], "rb") as f:
+            return f.read().decode("utf-8")
 
     def test_client_updates_from_v1_to_latest(self):
         installed = self.full_copy(1)
@@ -292,7 +290,7 @@ class TestApplyAndGuards(RepoTestCase):
         vr.add_version(repo2, self.v2, vr.VersionOptions(recommended="2.0.14"))
         vr.add_version(repo2, self.v3, vr.VersionOptions(required="2.1"))
         url = str(repo2 / "public" / "repo.json")
-        installed = unpack(repo2 / "public" / "s-000001.vidya.zip", self.tmp / "s.vidya")
+        installed = unpack(repo2 / "public" / "s-000001.vidya.zst", self.tmp / "s.vidya")
         vr.client_update(installed, repo_url=url, reader_version="2.0.0")  # recommended: asks first
         self.assertEqual(meta_of(installed)["repo_version"], "1")
         vr.client_update(installed, repo_url=url, reader_version="2.0.0", yes=True)  # stops before 3
@@ -316,7 +314,7 @@ class TestPruneAndVerify(RepoTestCase):
     def test_keep_first_and_last_full(self):
         lost = vr.prune(self.repo, full={2})
         self.assertEqual(lost, [])
-        self.assertFalse((self.public / "sample-en-000002.vidya.zip").exists())
+        self.assertFalse((self.public / "sample-en-000002.vidya.zst").exists())
         self.assertIsNone(vr.version_entry(self.manifest(), 2)["full"])
         res = vr.verify_repo(self.repo, deep=True)
         self.assertTrue(res.ok, res.errors)
@@ -336,10 +334,10 @@ class TestPruneAndVerify(RepoTestCase):
 
     def test_prune_dry_run(self):
         vr.prune(self.repo, full={1, 2}, dry_run=True)
-        self.assertTrue((self.public / "sample-en-000001.vidya.zip").exists())
+        self.assertTrue((self.public / "sample-en-000001.vidya.zst").exists())
 
     def test_verify_detects_tampering(self):
-        p = self.public / "sample-en-000002-000003.sql.zip"
+        p = self.public / "sample-en-000002-000003.sql.zst"
         data = bytearray(p.read_bytes())
         data[len(data) // 2] ^= 0xFF
         p.write_bytes(bytes(data))

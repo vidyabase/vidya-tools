@@ -20,11 +20,11 @@ import sys
 import tempfile
 import urllib.parse
 import urllib.request
-import zipfile
-import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
+
+from compression import zstd
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
@@ -56,9 +56,7 @@ MANAGED_KEYS = frozenset(
 GUARD_TABLE = "_vidya_repo_guard"
 PATCH_TAIL = b"COMMIT;\nPRAGMA foreign_keys = ON;\n"
 
-FULL_ZIP_LEVEL = 9
-DIFF_ZIP_LEVEL = 9
-ZIP_DATE = (1980, 1, 1, 0, 0, 0)
+ZSTD_LEVEL = 19
 CHUNK = 1 << 20
 
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -79,15 +77,15 @@ class RepoError(Exception):
 
 
 def full_file_name(slug: str, version: int) -> str:
-    return f"{slug}-{version:0{VERSION_DIGITS}d}.vidya.zip"
+    return f"{slug}-{version:0{VERSION_DIGITS}d}.vidya.zst"
 
 
 def diff_file_name(slug: str, from_version: int, to_version: int) -> str:
-    return f"{slug}-{from_version:0{VERSION_DIGITS}d}-{to_version:0{VERSION_DIGITS}d}.sql.zip"
+    return f"{slug}-{from_version:0{VERSION_DIGITS}d}-{to_version:0{VERSION_DIGITS}d}.sql.zst"
 
 
 def install_name(slug: str) -> str:
-    """File name a reader installs the library under (also the entry name inside full zips)."""
+    """File name a reader installs the library under ."""
     return f"{slug}.vidya"
 
 
@@ -174,68 +172,53 @@ def sha256_file(path: Path) -> tuple[int, str]:
     return n, h.hexdigest()
 
 
-def zip_file(src: Path, dst: Path, entry: str, level: int) -> dict:
-    """Pack src into a zip at dst holding one entry named `entry`.
+def zst_file(src: Path, dst: Path, level: int = ZSTD_LEVEL) -> dict:
+    """Compress src into a single zstd frame at dst.
 
-    Reproducible: fixed entry date and attributes, so the same input gives the same zip.
-    Returns size/sha256 of the zip and of the unpacked content.
+    Reproducible: the same input and level give the same bytes.
+    Returns size/sha256 of the .zst file and of the unpacked content.
     """
     raw = hashlib.sha256()
     raw_n = 0
-    info = zipfile.ZipInfo(entry, date_time=ZIP_DATE)
-    info.compress_type = zipfile.ZIP_DEFLATED
-    info.create_system = 3
-    info.external_attr = 0o644 << 16
-    for attr in ("compress_level", "_compresslevel"):  # public name since Python 3.13
-        if hasattr(info, attr):
-            setattr(info, attr, level)
-    big = Path(src).stat().st_size >= zipfile.ZIP64_LIMIT
-    with open(src, "rb") as fi, zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        with zf.open(info, "w", force_zip64=big) as w:
-            for chunk in iter(lambda: fi.read(CHUNK), b""):
-                raw.update(chunk)
-                raw_n += len(chunk)
-                w.write(chunk)
+    with open(src, "rb") as fi, zstd.open(dst, "wb", level=level) as w:
+        for chunk in iter(lambda: fi.read(CHUNK), b""):
+            raw.update(chunk)
+            raw_n += len(chunk)
+            w.write(chunk)
     size, sha = sha256_file(dst)
     return {"size": size, "sha256": sha, "raw_size": raw_n, "raw_sha256": raw.hexdigest()}
 
 
-def _unzip_stream(source, name: str, out=None) -> tuple[int, str, str]:
-    """Read the single entry of a zip (path or file object). Returns raw size, sha256, entry name."""
+def _unzst_stream(source, name: str, out=None) -> tuple[int, str]:
+    """Decompress a zstd file (path or file object). Returns raw size and sha256."""
     h = hashlib.sha256()
     n = 0
     try:
-        with zipfile.ZipFile(source) as zf:
-            entries = [i for i in zf.infolist() if not i.is_dir()]
-            if len(entries) != 1:
-                raise RepoError(f"{name}: expected exactly one file inside the zip, found {len(entries)}")
-            with zf.open(entries[0]) as r:
-                for chunk in iter(lambda: r.read(CHUNK), b""):
-                    h.update(chunk)
-                    n += len(chunk)
-                    if out is not None:
-                        out.write(chunk)
-            return n, h.hexdigest(), entries[0].filename
-    except (zipfile.BadZipFile, zlib.error, OSError, EOFError) as e:
-        raise RepoError(f"{name}: not a valid zip file ({e})") from e
+        with zstd.open(source, "rb") as r:
+            for chunk in iter(lambda: r.read(CHUNK), b""):
+                h.update(chunk)
+                n += len(chunk)
+                if out is not None:
+                    out.write(chunk)
+    except (zstd.ZstdError, OSError, EOFError) as e:
+        raise RepoError(f"{name}: not a valid zstd file ({e})") from e
+    return n, h.hexdigest()
 
 
-def unzip_file(src: Path, dst: Optional[Path] = None) -> tuple[int, str]:
-    """Unpack the single entry of zip src into dst (or only hash it when dst is None)."""
+def unzst_file(src: Path, dst: Optional[Path] = None) -> tuple[int, str]:
+    """Decompress zstd file src into dst (or only hash it when dst is None)."""
     src = Path(src)
     if dst is None:
-        n, sha, _ = _unzip_stream(src, src.name)
-        return n, sha
+        return _unzst_stream(src, src.name)
     with open(dst, "wb") as out:
-        n, sha, _ = _unzip_stream(src, src.name, out)
-    return n, sha
+        return _unzst_stream(src, src.name, out)
 
 
-def _publish_zip(src: Path, dst: Path, entry: str, level: int) -> dict:
+def _publish_zst(src: Path, dst: Path, level: int = ZSTD_LEVEL) -> dict:
     tmp = dst.with_name(dst.name + ".tmp")
-    info = zip_file(src, tmp, entry, level)
+    info = zst_file(src, tmp, level)
     os.replace(tmp, dst)
-    return {"file": dst.name, "entry": entry, **info}
+    return {"file": dst.name, **info}
 
 
 # --------------------------------------------------------------------------- db_meta
@@ -622,7 +605,7 @@ def init_repo(
         log("copying and stamping the file")
         stamp_copy(input_file, db, version=1, update_url=update_url, recommended=rec, required=req)
         log("packing full file")
-        full = _publish_zip(db, public / full_file_name(slug, 1), install_name(slug), FULL_ZIP_LEVEL)
+        full = _publish_zst(db, public / full_file_name(slug, 1))
         manifest = {
             "format": REPO_FORMAT,
             "slug": slug,
@@ -666,7 +649,7 @@ def add_version(repo: Path, input_file: Path, opts: Optional[VersionOptions] = N
         _clean_tmp_files(public)
         prev_db = work / f"{slug}-{latest:0{VERSION_DIGITS}d}.vidya"
         log(f"unpacking version {latest}")
-        _, raw_sha = unzip_file(public / prev["full"]["file"], prev_db)
+        _, raw_sha = unzst_file(public / prev["full"]["file"], prev_db)
         if raw_sha != prev["full"]["raw_sha256"]:
             raise RepoError(f"stored file of version {latest} does not match its checksum; run verify")
 
@@ -698,10 +681,10 @@ def add_version(repo: Path, input_file: Path, opts: Optional[VersionOptions] = N
                 raise RepoError("verification failed, differences remain:\n  " + "\n  ".join(rest))
 
         log("packing full file and diff")
-        full = _publish_zip(new_db, public / full_file_name(slug, version), install_name(slug), FULL_ZIP_LEVEL)
+        full = _publish_zst(new_db, public / full_file_name(slug, version))
         diff = {
             "from": latest,
-            **_publish_zip(patch, public / diff_file_name(slug, latest, version), patch.name, DIFF_ZIP_LEVEL),
+            **_publish_zst(patch, public / diff_file_name(slug, latest, version)),
             "stats": {
                 "insert": stats.inserted,
                 "update": stats.updated,
@@ -804,14 +787,12 @@ def _check_file(public: Path, info: dict, what: str, res: VerifyResult) -> None:
         res.errors.append(f"{what}: {p.name} does not match size/sha256 in repo.json")
         return
     try:
-        raw_size, raw_sha, entry = _unzip_stream(p, p.name)
+        raw_size, raw_sha = _unzst_stream(p, p.name)
     except RepoError as e:
         res.errors.append(f"{what}: {e}")
         return
     if raw_size != info.get("raw_size") or raw_sha != info.get("raw_sha256"):
         res.errors.append(f"{what}: unpacked {p.name} does not match raw_size/raw_sha256 in repo.json")
-    if info.get("entry") and entry != info["entry"]:
-        res.errors.append(f"{what}: {p.name} contains {entry!r}, repo.json says {info['entry']!r}")
 
 
 def verify_repo(repo: Path, *, deep: bool = False, log: Log = _quiet) -> VerifyResult:
@@ -873,7 +854,7 @@ def _deep_verify(repo: Path, manifest: dict, reach: set[int], res: VerifyResult,
     start = min(v for v in reach if version_entry(manifest, v).get("full"))
     with RepoLock(repo), _Workspace(repo) as work:
         db = work / "replay.vidya"
-        unzip_file(public / version_entry(manifest, start)["full"]["file"], db)
+        unzst_file(public / version_entry(manifest, start)["full"]["file"], db)
         got = parse_repo_version(read_meta_file(db).get(KEY_REPO_VERSION))
         if got != start:
             res.errors.append(f"full file of version {start} has repo_version {got}")
@@ -881,7 +862,7 @@ def _deep_verify(repo: Path, manifest: dict, reach: set[int], res: VerifyResult,
         for v in range(start + 1, latest + 1):
             d = version_entry(manifest, v)["diff"]
             sql = work / "step.sql"
-            unzip_file(public / d["file"], sql)
+            unzst_file(public / d["file"], sql)
             try:
                 apply_patch(db, sql.read_text(encoding="utf-8"), v)
             except RepoError as e:
@@ -889,7 +870,7 @@ def _deep_verify(repo: Path, manifest: dict, reach: set[int], res: VerifyResult,
                 return
             log(f"replayed diff {v - 1} -> {v}")
         latest_db = work / "latest.vidya"
-        unzip_file(public / version_entry(manifest, latest)["full"]["file"], latest_db)
+        unzst_file(public / version_entry(manifest, latest)["full"]["file"], latest_db)
         ok, rest = same_content(db, latest_db)
         if not ok:
             res.errors.append(
@@ -972,11 +953,11 @@ def fetch_bytes(url: str) -> bytes:
 
 
 def decode_download(data: bytes, info: dict) -> bytes:
-    """Check a downloaded zip against repo.json and return the unpacked content of its one entry."""
+    """Check a downloaded .zst file against repo.json and return its unpacked content."""
     if hashlib.sha256(data).hexdigest() != info["sha256"]:
         raise RepoError(f"{info['file']}: checksum mismatch")
     out = io.BytesIO()
-    _, raw_sha, _ = _unzip_stream(io.BytesIO(data), info["file"], out)
+    _, raw_sha = _unzst_stream(io.BytesIO(data), info["file"], out)
     if raw_sha != info["raw_sha256"]:
         raise RepoError(f"{info['file']}: unpacked checksum mismatch")
     return out.getvalue()
